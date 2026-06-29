@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import locale
 import os
 import struct
 import subprocess
@@ -61,15 +62,19 @@ $cert = $sig.SignerCertificate
             ],
             capture_output=True,
             text=True,
+            encoding=locale.getpreferredencoding(False),
+            errors="replace",
             timeout=timeout_seconds,
             startupinfo=startupinfo,
         )
         if completed.returncode != 0 or not completed.stdout.strip():
+            error_message = completed.stderr.strip() or completed.stdout.strip() or "No signature output"
             return {
                 "SignatureStatus": "Unknown",
                 "Publisher": "",
                 "SignerSubject": "",
                 "CertificateIssuer": "",
+                "SignatureError": error_message,
             }
 
         data = json.loads(completed.stdout.strip())
@@ -80,12 +85,13 @@ $cert = $sig.SignerCertificate
             "SignerSubject": data.get("SignerSubject") or "",
             "CertificateIssuer": data.get("CertificateIssuer") or "",
         }
-    except Exception:
+    except Exception as exc:
         return {
             "SignatureStatus": "Unknown",
             "Publisher": "",
             "SignerSubject": "",
             "CertificateIssuer": "",
+            "SignatureError": repr(exc),
         }
 
 
@@ -122,7 +128,8 @@ def get_file_version_info(file_path: Path) -> dict[str, str]:
                 result["Description"] = value
             else:
                 result[field] = value
-    except Exception:
+    except Exception as exc:
+        result["VersionInfoError"] = repr(exc)
         return result
 
     return result
@@ -151,4 +158,3 @@ def _query_version_string(
     if not ok or not pointer.value or length.value == 0:
         return ""
     return ctypes.wstring_at(pointer.value, length.value).rstrip("\x00")
-

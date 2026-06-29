@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import locale
 import os
 import shutil
 import subprocess
@@ -145,6 +146,8 @@ def _extract_with_7zip(seven_zip: Path, zip_path: Path, output_dir: Path, log: L
         ],
         capture_output=True,
         text=True,
+        encoding=locale.getpreferredencoding(False),
+        errors="replace",
         timeout=900,
         startupinfo=startupinfo,
     )
@@ -217,4 +220,3 @@ def _create_work_dir(log: LogFunc) -> Path:
 def _safe_name(value: str) -> str:
     safe = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in value)
     return safe[:80] or "archive"
-

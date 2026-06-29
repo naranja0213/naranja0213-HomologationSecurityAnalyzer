@@ -11,6 +11,8 @@ dist/
 *.spec
 
 *.log
+Summary.txt
+error.log
 Homologation_Report_*.xlsx
 Homologation_Result_*.json
 analysis_log_*.txt
@@ -19,4 +21,3 @@ analysis_log_*.txt
 .vscode/
 .DS_Store
 Thumbs.db
-

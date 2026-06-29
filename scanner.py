@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import traceback
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,7 @@ ProgressCallback = Callable[[int, int, str], None]
 class AnalysisResult:
     report_path: Path
     log_path: Path
+    summary_path: Path
     json_path: Path
     total_files: int
     target_files: int
@@ -33,18 +35,26 @@ class AnalysisResult:
 class AnalysisLogger:
     """Simple file logger so the GUI can run without configuring logging globals."""
 
-    def __init__(self, log_path: Path):
+    def __init__(self, log_path: Path, summary_path: Path):
         self.log_path = log_path
+        self.summary_path = summary_path
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self._handle = self.log_path.open("a", encoding="utf-8")
+        self._summary_handle = self.summary_path.open("w", encoding="utf-8", errors="replace")
 
     def info(self, message: str) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._handle.write(f"[{timestamp}] {message}\n")
         self._handle.flush()
 
+    def summary(self, message: str) -> None:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._summary_handle.write(f"[{timestamp}] {message}\n")
+        self._summary_handle.flush()
+
     def close(self) -> None:
         self._handle.close()
+        self._summary_handle.close()
 
 
 def analyze_source(
@@ -62,12 +72,14 @@ def analyze_source(
 
     report_path = output_dir / f"Homologation_Report_{safe_name}_{timestamp}.xlsx"
     log_path = output_dir / f"analysis_log_{timestamp}.txt"
+    summary_path = output_dir / "Summary.txt"
     json_path = output_dir / f"Homologation_Result_{timestamp}.json"
 
-    logger = AnalysisLogger(log_path)
+    logger = AnalysisLogger(log_path, summary_path)
     try:
         logger.info("Analysis started")
         logger.info(f"Source path: {source}")
+        logger.summary(f"Analysis started for: {source}")
         _progress(progress_callback, 0, 100, "Preparing source")
 
         prepared = prepare_source(source, logger.info)
@@ -95,10 +107,14 @@ def analyze_source(
             logger.info(message)
 
             try:
-                row = _analyze_file(file_item, prepared, vt_client, logger.info)
+                row = _analyze_file(file_item, prepared, vt_client, logger.info, logger.summary)
                 hash_rows.append(row)
             except Exception as exc:
                 logger.info(f"Failed to analyze {file_path}: {exc}")
+                logger.summary(
+                    "File analysis failed: "
+                    f"{file_path}\nException: {exc!r}\n{traceback.format_exc()}"
+                )
 
         all_file_rows = [_all_file_row(item) for item in all_files]
         summary = _build_summary(source, all_files, hash_rows)
@@ -110,11 +126,13 @@ def analyze_source(
         _write_json(json_path, summary, hash_rows, all_file_rows)
 
         logger.info("Analysis completed")
+        logger.summary("Analysis completed")
         _progress(progress_callback, total_targets, total_targets, f"Completed: {report_path}")
 
         return AnalysisResult(
             report_path=report_path,
             log_path=log_path,
+            summary_path=summary_path,
             json_path=json_path,
             total_files=len(all_files),
             target_files=len(target_files),
@@ -128,13 +146,14 @@ def _analyze_file(
     prepared: PreparedSource,
     vt_client: VirusTotalClient,
     log: Callable[[str], None],
+    summary_log: Callable[[str], None],
 ) -> dict[str, Any]:
     file_path: Path = file_item["path"]
     stat = file_path.stat()
 
     hashes = calculate_hashes(file_path)
-    signature = get_authenticode_signature(file_path)
-    version_info = get_file_version_info(file_path)
+    signature = _safe_signature(file_path, summary_log)
+    version_info = _safe_version_info(file_path, summary_log)
     vt = vt_client.lookup_file(hashes["SHA256"])
 
     risk = evaluate_risk(
@@ -186,6 +205,48 @@ def _analyze_file(
         log(f"High risk decision for {file_path}: {row['Decision']}")
 
     return {header: row.get(header, "") for header in HASH_REPORT_HEADERS}
+
+
+def _safe_signature(file_path: Path, summary_log: Callable[[str], None]) -> dict[str, str]:
+    try:
+        signature = get_authenticode_signature(file_path)
+        error = signature.pop("SignatureError", "")
+        if error:
+            summary_log(f"Signature extraction failed: {file_path}\nException: {error}")
+        return signature
+    except Exception as exc:
+        summary_log(
+            "Signature extraction failed: "
+            f"{file_path}\nException: {exc!r}\n{traceback.format_exc()}"
+        )
+        return {
+            "SignatureStatus": "Unknown",
+            "Publisher": "",
+            "SignerSubject": "",
+            "CertificateIssuer": "",
+        }
+
+
+def _safe_version_info(file_path: Path, summary_log: Callable[[str], None]) -> dict[str, str]:
+    try:
+        version_info = get_file_version_info(file_path)
+        error = version_info.pop("VersionInfoError", "")
+        if error:
+            summary_log(f"Version info extraction failed: {file_path}\nException: {error}")
+        return version_info
+    except Exception as exc:
+        summary_log(
+            "Version info extraction failed: "
+            f"{file_path}\nException: {exc!r}\n{traceback.format_exc()}"
+        )
+        return {
+            "ProductName": "",
+            "CompanyName": "",
+            "FileVersion": "",
+            "ProductVersion": "",
+            "Description": "",
+            "OriginalFilename": "",
+        }
 
 
 def _collect_files(

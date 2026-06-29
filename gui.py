@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import threading
 import tkinter as tk
+import traceback
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -126,8 +128,9 @@ class HomologationSecurityAnalyzerApp(tk.Tk):
                 progress_callback=self._on_progress,
             )
             self.after(0, lambda: self._analysis_done(result))
-        except Exception as exc:
-            self.after(0, lambda: self._analysis_failed(exc))
+        except Exception:
+            traceback_text = traceback.format_exc()
+            self.after(0, lambda text=traceback_text: self._analysis_failed(text))
 
     def _on_progress(self, current: int, total: int, message: str) -> None:
         percent = 0 if total <= 0 else min(100, max(0, (current / total) * 100))
@@ -146,10 +149,27 @@ class HomologationSecurityAnalyzerApp(tk.Tk):
         )
         messagebox.showinfo(APP_NAME, f"Analysis completed.\n\nReport:\n{result.report_path}")
 
-    def _analysis_failed(self, exc: Exception) -> None:
+    def _analysis_failed(self, traceback_text: str) -> None:
         self.start_button.configure(state="normal")
         self.status.set("Analysis failed")
-        messagebox.showerror(APP_NAME, f"Analysis failed:\n{exc}")
+        error_log = self._write_error_log(traceback_text)
+        messagebox.showerror(
+            APP_NAME,
+            f"Analysis failed. Full traceback saved to:\n{error_log}\n\n{traceback_text}",
+        )
+
+    def _write_error_log(self, traceback_text: str) -> Path:
+        source = Path(self.source_path.get().strip() or ".").resolve()
+        output_dir = source.parent if source.exists() else Path.cwd()
+        error_log = output_dir / "error.log"
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        content = (
+            f"[{timestamp}]\n"
+            f"Source: {self.source_path.get().strip()}\n\n"
+            f"{traceback_text}"
+        )
+        error_log.write_text(content, encoding="utf-8", errors="replace")
+        return error_log
 
     def _copy_report_path(self) -> None:
         value = self.report_path.get()
@@ -162,4 +182,3 @@ class HomologationSecurityAnalyzerApp(tk.Tk):
 def run_app() -> None:
     app = HomologationSecurityAnalyzerApp()
     app.mainloop()
-
